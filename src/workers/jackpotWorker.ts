@@ -1,13 +1,19 @@
 import cron from "node-cron";
 import { Op } from "sequelize";
-import { ethers } from "ethers";
 import { v4 as uuidv4 } from "uuid";
+import { formatEther, isAddress, parseEther } from "viem";
 
 import { Jackpot } from "../models/Jackpot";
 import { JackpotEntry } from "../models/JackpotEntry";
 import { Transfer } from "../models/Transfer";
 
-import { wallet } from "../utils/web3";
+import {
+  getEstimatedGasPriceWei,
+  getWalletBalanceWei,
+  sendWalletTransaction,
+  waitForWalletTransactionReceipt,
+  walletAddress,
+} from "../utils/web3";
 import { JackpotLog, JackpotLogType } from "../models/JackpotLog";
 import {
   calculateJackpotPool,
@@ -16,12 +22,13 @@ import {
 } from "../utils/jackpot.utils";
 
 export const startJackpotWorker = () => {
-  cron.schedule("0 0 * * 5", async () => {
+  // cron.schedule("0 0 * * 5", async () => {
+  cron.schedule("*/10 * * * *", async () => {
     console.log("[Jackpot Worker] Running weekly job...");
 
     try {
       await resolvePreviousJackpots();
-      await createNewWeeklyJackpot();
+      await createNewWeeklyJackpotIfNeeded();
     } catch (error) {
       console.error(error);
     }
@@ -55,6 +62,7 @@ export const resolvePreviousJackpots = async () => {
       isActive: true,
       endAt: { [Op.lte]: now },
     },
+    order: [["endAt", "ASC"]],
     include: [
       {
         model: JackpotEntry,
@@ -157,10 +165,23 @@ export const resolvePreviousJackpots = async () => {
     );
 
     const winners = selectRandomWinners(walletAddresses, distribution);
+    const avaxRate = pool.breakdown.avaxRate;
+    const payoutPlan = winners.map((winner) => {
+      const prizeAVAX = winner.prizeUSD / avaxRate;
+      return {
+        ...winner,
+        prizeAVAX,
+        prizeAVAXStr: prizeAVAX.toFixed(18),
+      };
+    });
+
     console.log(
       `[Jackpot Worker] Winners selected for ${jackpot.id}:`,
-      winners
-        .map((w) => `${w.place}: ${w.walletAddress} (${w.prizeUSD} USD)`)
+      payoutPlan
+        .map(
+          (w) =>
+            `${w.place}: ${w.walletAddress} (${w.prizeUSD} USD / ${w.prizeAVAXStr} AVAX)`,
+        )
         .join(", "),
     );
 
@@ -168,42 +189,74 @@ export const resolvePreviousJackpots = async () => {
       jackpot.id,
       "winner_selected",
       "Winners selected",
-      winners,
+      payoutPlan,
     );
 
-    for (const winner of winners) {
-      try {
-        console.log(
-          `[Jackpot Worker] Sending ${winner.prizeUSD} USD to ${winner.walletAddress} (Place ${winner.place})...`,
-        );
-        const amountWei = ethers.parseEther(winner.prizeUSD.toString());
+    const treasuryBalanceWei = await getWalletBalanceWei();
+    const gasPriceWei = await getEstimatedGasPriceWei();
+    const estimatedGasWei =
+      gasPriceWei !== null && gasPriceWei > 0n
+        ? gasPriceWei * 21_000n * BigInt(payoutPlan.length)
+        : parseEther("0.01");
 
-        const tx = await wallet.sendTransaction({
+    const totalPayoutWei = payoutPlan.reduce(
+      (sum, winner) => sum + parseEther(winner.prizeAVAXStr),
+      0n,
+    );
+    const totalRequiredWei = totalPayoutWei + estimatedGasWei;
+
+    if (treasuryBalanceWei < totalRequiredWei) {
+      const message =
+        "Treasury has insufficient AVAX balance for jackpot payout + gas";
+      console.error(
+        `[Jackpot Worker] ${message}. required=${formatEther(totalRequiredWei)} AVAX, balance=${formatEther(treasuryBalanceWei)} AVAX`,
+      );
+      await logJackpotEvent(jackpot.id, "error", message, {
+        requiredAVAX: formatEther(totalRequiredWei),
+        availableAVAX: formatEther(treasuryBalanceWei),
+      });
+      continue;
+    }
+
+    let successfulTransfers = 0;
+
+    for (const winner of payoutPlan) {
+      try {
+        if (!isAddress(winner.walletAddress)) {
+          throw new Error(`Invalid winner address: ${winner.walletAddress}`);
+        }
+
+        console.log(
+          `[Jackpot Worker] Sending ${winner.prizeAVAXStr} AVAX (${winner.prizeUSD} USD) to ${winner.walletAddress} (Place ${winner.place})...`,
+        );
+        const amountWei = parseEther(winner.prizeAVAXStr);
+
+        const txHash = await sendWalletTransaction({
           to: winner.walletAddress,
           value: amountWei,
         });
 
         console.log(
-          `[Jackpot Worker] Transaction sent for ${winner.walletAddress}: ${tx.hash}. Waiting for receipt...`,
+          `[Jackpot Worker] Transaction sent for ${winner.walletAddress}: ${txHash}. Waiting for receipt...`,
         );
 
-        const receipt = await tx.wait();
+        const receipt = await waitForWalletTransactionReceipt(txHash);
 
         if (!receipt) {
           throw new Error("Transaction failed (no receipt)");
         }
 
         console.log(
-          `[Jackpot Worker] Transaction confirmed for ${winner.walletAddress}: ${receipt.hash}`,
+          `[Jackpot Worker] Transaction confirmed for ${winner.walletAddress}: ${receipt.transactionHash}`,
         );
 
         await Transfer.create({
           id: uuidv4(),
-          amount: winner.prizeUSD.toString(),
-          currency: "USD",
-          fromWallet: wallet.address,
+          amount: winner.prizeAVAX.toFixed(8),
+          currency: "AVAX",
+          fromWallet: walletAddress,
           toWallet: winner.walletAddress,
-          txHash: receipt.hash,
+          txHash: receipt.transactionHash,
           jackpotId: jackpot.id,
           network: "avalanche-c-chain-testnet",
         });
@@ -211,9 +264,12 @@ export const resolvePreviousJackpots = async () => {
         await logJackpotEvent(jackpot.id, "transfer_sent", "Prize sent", {
           wallet: winner.walletAddress,
           place: winner.place,
-          amount: winner.prizeUSD,
-          txHash: receipt.hash,
+          amountUSD: winner.prizeUSD,
+          amountAVAX: winner.prizeAVAX.toFixed(8),
+          txHash: receipt.transactionHash,
         });
+
+        successfulTransfers += 1;
       } catch (error) {
         console.error(
           `[Jackpot Worker] FAILED to send prize to ${winner.walletAddress}:`,
@@ -226,16 +282,41 @@ export const resolvePreviousJackpots = async () => {
       }
     }
 
-    await jackpot.update({ isActive: false });
-    console.log(
-      `[Jackpot Worker] Jackpot ${jackpot.id} marked as inactive (resolved).`,
-    );
+    if (successfulTransfers === payoutPlan.length) {
+      await jackpot.update({ isActive: false });
+      console.log(
+        `[Jackpot Worker] Jackpot ${jackpot.id} marked as inactive (resolved).`,
+      );
 
-    await logJackpotEvent(
-      jackpot.id,
-      "resolved",
-      "Jackpot resolved successfully",
-    );
+      await logJackpotEvent(
+        jackpot.id,
+        "resolved",
+        "Jackpot resolved successfully",
+      );
+    } else if (successfulTransfers === 0) {
+      console.error(
+        `[Jackpot Worker] Jackpot ${jackpot.id} payout failed for all winners. Keeping jackpot active for retry after treasury refill.`,
+      );
+      await logJackpotEvent(
+        jackpot.id,
+        "error",
+        "No payouts succeeded; jackpot remains active",
+      );
+    } else {
+      await jackpot.update({ isActive: false });
+      console.error(
+        `[Jackpot Worker] Jackpot ${jackpot.id} had partial payout (${successfulTransfers}/${payoutPlan.length}). Marked inactive to prevent duplicate payouts.`,
+      );
+      await logJackpotEvent(
+        jackpot.id,
+        "error",
+        "Partial payout failure; jackpot marked inactive for manual review",
+        {
+          successfulTransfers,
+          expectedTransfers: payoutPlan.length,
+        },
+      );
+    }
   }
   console.log(`[Jackpot Worker] Resolution process completed.`);
 };
@@ -269,4 +350,22 @@ export const createNewWeeklyJackpot = async () => {
 
   await logJackpotEvent(jackpot.id, "created", "Weekly jackpot created");
   return jackpot;
+};
+
+export const createNewWeeklyJackpotIfNeeded = async () => {
+  const existingActiveJackpot = await Jackpot.findOne({
+    where: {
+      isActive: true,
+    },
+    order: [["createdAt", "DESC"]],
+  });
+
+  if (existingActiveJackpot) {
+    console.log(
+      `[Jackpot Worker] Skipping creation: active jackpot already exists (ID=${existingActiveJackpot.id}, Ends=${existingActiveJackpot.endAt.toISOString()})`,
+    );
+    return existingActiveJackpot;
+  }
+
+  return createNewWeeklyJackpot();
 };
