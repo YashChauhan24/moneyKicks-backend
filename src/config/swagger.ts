@@ -454,6 +454,11 @@ export const swaggerSpec = swaggerJsdoc({
               type: "object",
               properties: {
                 totalValueLocked: { type: "number" },
+                currency: {
+                  anyOf: [{ type: "string" }, { type: "null" }],
+                  description:
+                    "Currency for totalValueLocked. Returns MIXED when live bets span multiple currencies.",
+                },
                 activeBets: { type: "integer" },
                 activeUsers: { type: "integer" },
               },

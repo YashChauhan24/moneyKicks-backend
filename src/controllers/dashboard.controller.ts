@@ -35,9 +35,16 @@ export const getDashboardOverview = async (
       subQuery: false,
     });
 
-    const [tvlRow] = await sequelize.query<{ tvl: string }>(
+    const [tvlRow] = await sequelize.query<{
+      tvl: string;
+      currency: string | null;
+      currencyCount: number;
+    }>(
       `
-  SELECT COALESCE(SUM(bp.amount), 0) AS tvl
+  SELECT
+    COALESCE(SUM(bp.amount), 0) AS tvl,
+    MIN(b.currency) AS currency,
+    COUNT(DISTINCT b.currency) AS currencyCount
   FROM \`bets\` b
   LEFT JOIN \`bet_predictions\` bp ON bp.\`betId\` = b.\`id\`
   WHERE b.\`status\` = 'live'
@@ -45,8 +52,11 @@ export const getDashboardOverview = async (
       { type: QueryTypes.SELECT },
     );
 
-    console.log(tvlRow);
     const totalValueLocked = Number(tvlRow?.tvl ?? 0);
+    const tvlCurrency =
+      Number(tvlRow?.currencyCount ?? 0) <= 1
+        ? (tvlRow?.currency ?? null)
+        : "MIXED";
 
     // 🔹 Active Users (distinct predictors)
     const activeUsers = await BetPrediction.count({
@@ -97,6 +107,7 @@ export const getDashboardOverview = async (
     return res.json({
       stats: {
         totalValueLocked,
+        currency: tvlCurrency,
         activeBets,
         activeUsers,
       },
