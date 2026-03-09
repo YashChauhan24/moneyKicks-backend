@@ -8,4 +8,3 @@ const betInviteRouter = Router();
 betInviteRouter.post("/", authMiddleware, createBetInvite);
 
 export default betInviteRouter;
-

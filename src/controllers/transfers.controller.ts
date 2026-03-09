@@ -17,7 +17,7 @@ interface CreateTransferBody {
  * Helper: basic validation for incoming transfer payload.
  */
 const validateCreateTransferBody = (
-  body: any
+  body: any,
 ): {
   valid: boolean;
   errors: string[];
@@ -58,7 +58,7 @@ const validateCreateTransferBody = (
 export const createTransfer = async (
   req: Request<unknown, unknown, CreateTransferBody>,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) => {
   try {
     const { valid, errors } = validateCreateTransferBody(req.body);
@@ -70,8 +70,15 @@ export const createTransfer = async (
       });
     }
 
-    const { fromWallet, toWallet, amount, currency, txHash, network, jackpotId } =
-      req.body;
+    const {
+      fromWallet,
+      toWallet,
+      amount,
+      currency,
+      txHash,
+      network,
+      jackpotId,
+    } = req.body;
 
     // If a jackpotId is provided, this transfer also represents
     // participation in that jackpot for the fromWallet address.
@@ -98,10 +105,7 @@ export const createTransfer = async (
         });
       }
 
-      if (
-        jackpot.currency !== "BOTH" &&
-        currency !== jackpot.currency
-      ) {
+      if (jackpot.currency !== "BOTH" && currency !== jackpot.currency) {
         return res.status(400).json({
           message: "Transfer currency is not allowed for this jackpot.",
         });
@@ -150,7 +154,7 @@ export const createTransfer = async (
 export const getTransferById = async (
   req: Request<{ id: string }>,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) => {
   try {
     const transfer = await Transfer.findByPk(req.params.id);
@@ -170,7 +174,7 @@ export const getTransferById = async (
 export const getTransfersList = async (
   req: Request,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) => {
   try {
     const limit = Number(req.query.limit ?? 20);

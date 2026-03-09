@@ -8,6 +8,8 @@ import {
   getJackpotParticipantByWallet,
   getJackpotPool,
   selectJackpotWinners,
+  triggerJackpotResolve,
+  triggerJackpotCreate,
 } from "../controllers/jackpots.controller";
 
 const jackpotRouter = Router();
@@ -28,12 +30,19 @@ jackpotRouter.get("/:jackpotId/entries", listJackpotEntries);
 jackpotRouter.post("/:jackpotId/check-eligibility", checkJackpotEligibility);
 
 // Get participation for a specific wallet in a jackpot
-jackpotRouter.get("/:jackpotId/participants/:walletAddress",getJackpotParticipantByWallet);
+jackpotRouter.get(
+  "/:jackpotId/participants/:walletAddress",
+  getJackpotParticipantByWallet,
+);
 
 // Get the total pool for a jackpot (USD + AVAX converted to USD)
 jackpotRouter.get("/:jackpotId/pool", getJackpotPool);
 
 // Select 3 random winners and calculate prize distribution
 jackpotRouter.post("/:jackpotId/select-winners", selectJackpotWinners);
+
+// Manual trigger for testing
+jackpotRouter.post("/manual/resolve", triggerJackpotResolve);
+jackpotRouter.post("/manual/create-weekly", triggerJackpotCreate);
 
 export default jackpotRouter;

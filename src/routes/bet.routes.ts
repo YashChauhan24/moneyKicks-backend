@@ -4,6 +4,8 @@ import {
   listBets,
   getBetById,
   createBetPrediction,
+  acceptBetInvite,
+  pickBetWinner,
 } from "../controllers/bets.controller";
 import { authMiddleware } from "../middleware/auth";
 
@@ -21,5 +23,12 @@ betRouter.get("/:betId", getBetById);
 // Place a prediction on a bet (requires authentication)
 betRouter.post("/:betId/predictions", authMiddleware, createBetPrediction);
 
-export default betRouter;
+// Accept a bet invite link (requires authentication)
+betRouter.post("/:betId/accept-invite", authMiddleware, acceptBetInvite);
 
+// Pick winner for a bet (requires authentication and creator ownership)
+betRouter.post("/:betId/pick-winner", authMiddleware, pickBetWinner);
+
+// betRouter.post("/:betId/claim", claimRewardStatus);
+
+export default betRouter;

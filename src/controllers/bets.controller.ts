@@ -3,6 +3,9 @@ import { Op, Sequelize, WhereOptions } from "sequelize";
 import { AuthenticatedRequest } from "../middleware/auth";
 import { Bet, BetAttributes, BetStatus } from "../models/Bet";
 import { BetPrediction, BetSide } from "../models/BetPrediction";
+import { BetPayout } from "../models/BetPayout";
+import { processPendingBetSettlements } from "../workers/betSettlementWorker";
+import { sequelize } from "../config/database";
 
 interface CreateBetBody {
   title: string;
@@ -15,6 +18,11 @@ interface CreateBetBody {
   endAt: string;
   status?: BetStatus;
   startAt?: string;
+  side?: BetSide;
+}
+
+interface PickWinnerBody {
+  winnerSide: BetSide;
 }
 
 interface CreatePredictionBody {
@@ -49,6 +57,7 @@ export const createBet = async (
       endAt,
       status,
       startAt,
+      side,
     } = req.body as CreateBetBody;
 
     if (!title || typeof title !== "string") {
@@ -66,7 +75,15 @@ export const createBet = async (
     if (!endCondition || typeof endCondition !== "string") {
       return res.status(400).json({ message: "endCondition is required." });
     }
+    if (!side || typeof side !== "string") {
+      return res.status(400).json({ message: "side is required." });
+    }
+    if (side !== "A" && side !== "B") {
+      return res.status(400).json({ message: "side must be A or B." });
+    }
 
+    const creatorSide: BetSide = side;
+    const opponentSide: BetSide = creatorSide === "A" ? "B" : "A";
     const parsedStake = parsePositiveAmount(stakeAmount);
     if (parsedStake === null) {
       return res.status(400).json({
@@ -100,13 +117,57 @@ export const createBet = async (
         .json({ message: "endAt must be greater than startAt." });
     }
 
-    let resolvedStatus: BetStatus = "live";
-    if (status === "pending" || status === "live" || status === "settled") {
-      resolvedStatus = status;
-    } else if (start > new Date()) {
-      resolvedStatus = "pending";
-    }
+    const resolvedStatus: BetStatus = "pending";
 
+    // // --- DEPLOY BET ESCROW ON-CHAIN ---
+    // let contractAddress: string | undefined;
+    // try {
+    //   // Convert stakeAmount to Wei
+    //   const stakeInWei = ethers.parseEther(String(parsedStake));
+    //   // Convert Date object to unix timestamp for the smart contract
+    //   const endTimeUnix = Math.floor(end.getTime() / 1000);
+    //   // Call the createBet method on BettingFactory
+    //   const tx = await (bettingFactoryContract as any).createBet(
+    //     title,
+    //     competitorAName,
+    //     competitorBName,
+    //     stakeInWei,
+    //     endTimeUnix,
+    //   );
+    //   // Wait for it to be mined
+    //   const receipt = await tx.wait();
+    //   // Extract the address of the newly deployed BetEscrow from the events
+    //   // Find the BetCreated event (address indexed betAddress, string title, ...)
+    //   const event = receipt.logs.find(
+    //     (log: any) => log.fragment && log.fragment.name === "BetCreated",
+    //   );
+    //   // If ethers parsed the fragment, we grab it from args. Alternatively we grab from the returned topic.
+    //   // Usually ethers v6 provides it in the logged event if the ABI has the BetCreated event correctly mapped.
+    //   if (event && event.args) {
+    //     contractAddress = event.args[0]; // The deployed address is the first arg
+    //   } else {
+    //     // Fallback manual parsing if args are missing but it's the exact ABI we just compiled
+    //     const parsedLog = bettingFactoryContract.interface.parseLog({
+    //       topics: receipt.logs[0].topics as string[],
+    //       data: receipt.logs[0].data,
+    //     });
+    //     contractAddress = parsedLog?.args[0];
+    //   }
+    //   if (!contractAddress) {
+    //     console.warn(
+    //       "Could not find BetEscrow contract address in tx logs. Factory may have failed silently. hash:",
+    //       tx.hash,
+    //     );
+    //   }
+    // } catch (smartContractError) {
+    //   console.error("Smart contract deployment failed:", smartContractError);
+    //   return res.status(500).json({
+    //     message:
+    //       "Failed to deploy the betting contract to the blockchain. Check backend AVAX balance and config.",
+    //     error: String(smartContractError),
+    //   });
+    // }
+    // --- SAVE TO DATABASE ---
     const bet = await Bet.create({
       title,
       description,
@@ -119,11 +180,24 @@ export const createBet = async (
       startAt: start,
       endAt: end,
       createdByUserId: req.user.id,
+      opponentUserId: null,
+      creatorSide,
+      // contractAddress: contractAddress || "",
+    });
+
+    await BetPrediction.create({
+      betId: bet.id,
+      userId: req.user.id,
+      side,
+      amount: String(parsedStake),
     });
 
     return res.status(201).json({
       message: "Bet created successfully.",
-      data: bet,
+      data: {
+        ...bet.toJSON(),
+        opponentSide,
+      },
     });
   } catch (error) {
     next(error);
@@ -316,6 +390,13 @@ export const getBetById = async (
       data: {
         ...bet.toJSON(),
         stats,
+        payouts: await BetPayout.findAll({
+          where: { betId },
+          order: [
+            ["isWinner", "DESC"],
+            ["netPayoutAmount", "DESC"],
+          ],
+        }),
       },
     });
   } catch (error) {
@@ -377,6 +458,64 @@ export const createBetPrediction = async (
       });
     }
 
+    const creatorId = bet.createdByUserId;
+    const opponentId = bet.opponentUserId;
+    if (!opponentId) {
+      return res.status(400).json({
+        message: "Bet is not ready yet. Opponent has not accepted invite.",
+      });
+    }
+    const isCoreParticipant = req.user.id === creatorId || req.user.id === opponentId;
+
+    if (isCoreParticipant) {
+      const expectedSide: BetSide =
+        req.user.id === creatorId
+          ? bet.creatorSide
+          : bet.creatorSide === "A"
+            ? "B"
+            : "A";
+
+      if (side !== expectedSide) {
+        return res.status(400).json({
+          message: `Invalid side. Your allowed side for this bet is ${expectedSide}.`,
+        });
+      }
+
+      const existingPrediction = await BetPrediction.findOne({
+        where: {
+          betId,
+          userId: req.user.id,
+        },
+      });
+
+      if (existingPrediction) {
+        return res.status(409).json({
+          message: "Creator and opponent can place only one fixed stake in this bet.",
+        });
+      }
+
+      if (parsedAmount !== minStake) {
+        return res.status(400).json({
+          message: `Creator/opponent stake must be exactly ${bet.stakeAmount}.`,
+        });
+      }
+    } else {
+      const oppositeSidePrediction = await BetPrediction.findOne({
+        where: {
+          betId,
+          userId: req.user.id,
+          side: side === "A" ? "B" : "A",
+        },
+      });
+
+      if (oppositeSidePrediction) {
+        return res.status(409).json({
+          message:
+            "Public participants can add stake on only one side per bet.",
+        });
+      }
+    }
+
     const prediction = await BetPrediction.create({
       betId,
       userId: req.user.id,
@@ -392,3 +531,293 @@ export const createBetPrediction = async (
     next(error);
   }
 };
+
+export const acceptBetInvite = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  const tx = await sequelize.transaction();
+
+  try {
+    if (!req.user) {
+      await tx.rollback();
+      return res.status(401).json({ message: "Unauthorized." });
+    }
+
+    const { betId } = req.params as { betId: string };
+    const bet = await Bet.findByPk(betId, {
+      transaction: tx,
+      lock: tx.LOCK.UPDATE,
+    });
+
+    if (!bet) {
+      await tx.rollback();
+      return res.status(404).json({ message: "Bet not found." });
+    }
+
+    if (bet.createdByUserId === req.user.id) {
+      await tx.rollback();
+      return res.status(400).json({
+        message: "Bet creator cannot accept their own invite.",
+      });
+    }
+
+    if (bet.opponentUserId && bet.opponentUserId !== req.user.id) {
+      await tx.rollback();
+      return res.status(409).json({
+        message: "This bet already has an opponent.",
+      });
+    }
+
+    if (bet.status !== "pending" && bet.opponentUserId !== req.user.id) {
+      await tx.rollback();
+      return res.status(400).json({
+        message: "Only pending bets can be accepted.",
+      });
+    }
+
+    if (!bet.opponentUserId) {
+      await bet.update(
+        {
+          opponentUserId: req.user.id,
+          status: "live",
+        },
+        { transaction: tx },
+      );
+    }
+
+    await tx.commit();
+
+    return res.json({
+      message: "Bet accepted successfully. Bet is now live.",
+      data: bet,
+    });
+  } catch (error) {
+    await tx.rollback();
+    next(error);
+  }
+};
+
+export const pickBetWinner = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Unauthorized." });
+    }
+
+    const { betId } = req.params as { betId: string };
+    const { winnerSide } = req.body as PickWinnerBody;
+
+    if (winnerSide !== "A" && winnerSide !== "B") {
+      return res.status(400).json({
+        message: "winnerSide must be 'A' or 'B'.",
+      });
+    }
+
+    const bet = await Bet.findByPk(betId);
+    if (!bet) {
+      return res.status(404).json({ message: "Bet not found." });
+    }
+
+    if (bet.status !== "live") {
+      return res.status(400).json({
+        message: "Winner can only be picked for LIVE bets.",
+      });
+    }
+
+    if (bet.createdByUserId !== req.user.id) {
+      return res.status(403).json({
+        message: "Only the bet creator can pick the winner.",
+      });
+    }
+
+    if (new Date() < bet.endAt) {
+      return res.status(400).json({
+        message: "Winner cannot be picked before bet endAt.",
+      });
+    }
+
+    if (!bet.opponentUserId) {
+      return res.status(400).json({
+        message: "Cannot pick winner before an opponent accepts the invite.",
+      });
+    }
+
+    const predictions = await BetPrediction.findAll({
+      where: { betId: bet.id },
+    });
+    const participants = new Set(predictions.map((p) => p.userId));
+    if (
+      !participants.has(bet.createdByUserId) ||
+      !participants.has(bet.opponentUserId)
+    ) {
+      return res.status(400).json({
+        message:
+          "Both creator and opponent must place their stakes before picking winner.",
+      });
+    }
+
+    bet.winnerSide = winnerSide;
+    bet.pickedWinnerByUserId = req.user.id;
+    await bet.save();
+
+    await processPendingBetSettlements();
+
+    const settledBet = await Bet.findByPk(bet.id, {
+      include: [{ model: BetPayout, as: "payouts" }],
+    });
+
+    return res.json({
+      message: "Winner picked successfully.",
+      data: settledBet,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// export const resolveBet = async (
+//   req: Request<{ betId: string }>,
+//   res: Response,
+// ) => {
+//   try {
+//     // if (!req.user || req.user.role !== "admin") {
+//     //   return res.status(403).json({ message: "Only admin can resolve bets." });
+//     // }
+
+//     const { betId } = req.params;
+//     const { winner } = req.body; // 1 = A, 2 = B
+
+//     if (![1, 2].includes(winner)) {
+//       return res.status(400).json({ message: "Winner must be 1 or 2." });
+//     }
+
+//     const bet = await Bet.findByPk(betId);
+//     if (!bet) {
+//       return res.status(404).json({ message: "Bet not found." });
+//     }
+
+//     if (bet.status !== "live") {
+//       return res.status(400).json({
+//         message: "Only LIVE bets can be resolved.",
+//       });
+//     }
+
+//     // if (new Date() < bet.endAt) {
+//     //   return res.status(400).json({
+//     //     message: "Bet cannot be resolved before end time.",
+//     //   });
+//     // }
+
+//     if (!bet.contractAddress) {
+//       return res.status(400).json({
+//         message: "Bet does not have a contract address.",
+//       });
+//     }
+
+//     const contract = new ethers.Contract(
+//       bet.contractAddress,
+//       betEscrowAbi.abi as InterfaceAbi,
+//       wallet,
+//     );
+
+//     // Extra safety: ensure backend is owner
+//     // const owner = await contract.owner();
+//     // if (owner.toLowerCase() !== deployer.address.toLowerCase()) {
+//     //   return res.status(403).json({
+//     //     message: "Backend is not owner of this bet contract.",
+//     //   });
+//     // }
+
+//     const tx = await contract.getFunction("resolveBet")(winner);
+//     const result = await tx.wait();
+//     console.log("result", result);
+
+//     // Update DB
+//     bet.status = "settled";
+//     await bet.save();
+
+//     return res.json({
+//       success: true,
+//       message: "Bet resolved successfully.",
+//       winner: winner === 1 ? "A" : "B",
+//     });
+//   } catch (error: any) {
+//     console.error("Resolve error:", error);
+//     return res.status(500).json({
+//       message: error.message || "Failed to resolve bet.",
+//     });
+//   }
+// };
+
+// export const claimRewardStatus = async (req: Request, res: Response) => {
+//   try {
+//     // if (!req.user) {
+//     //   return res.status(401).json({ message: "Unauthorized." });
+//     // }
+
+//     const { betId } = req.params;
+
+//     const bet = await Bet.findByPk(betId);
+//     if (!bet) {
+//       return res.status(404).json({ message: "Bet not found." });
+//     }
+
+//     if (bet.status !== "settled") {
+//       return res.status(400).json({
+//         message: "Bet is not settled yet.",
+//       });
+//     }
+
+//     // const prediction = await BetPrediction.findOne({
+//     //   where: {
+//     //     betId,
+//     //     userId: req.user.id,
+//     //   },
+//     // });
+
+//     // if (!prediction) {
+//     //   return res.status(404).json({
+//     //     message: "You did not participate in this bet.",
+//     //   });
+//     // }
+
+//     if (!bet.contractAddress) {
+//       return res.status(400).json({
+//         message: "Bet does not have a contract address.",
+//       });
+//     }
+
+//     const contract = new ethers.Contract(
+//       bet.contractAddress,
+//       betEscrowAbi.abi as InterfaceAbi,
+//       wallet,
+//     );
+//     const tx = await contract.getFunction("claimReward")();
+//     const result = await tx.wait();
+//     console.log("result", result);
+
+//     // const winningSide = bet.winner; // assume you store winner in DB if needed
+
+//     // if (prediction.side !== winningSide) {
+//     //   return res.status(400).json({
+//     //     message: "You are not on the winning side.",
+//     //   });
+//     // }
+
+//     return res.json({
+//       eligible: true,
+//       message:
+//         "You can claim your reward from the smart contract using your wallet.",
+//     });
+//   } catch (error: any) {
+//     console.error("Claim status error:", error);
+//     return res.status(500).json({
+//       message: error.message || "Failed to check claim status.",
+//     });
+//   }
+// };

@@ -226,6 +226,7 @@ export const swaggerSpec = swaggerJsdoc({
           type: "object",
           properties: {
             id: { type: "string", format: "uuid" },
+            betId: { type: "string", format: "uuid", nullable: true },
             inviterUserId: { type: "string", format: "uuid" },
             inviteeTwitterUsername: { type: "string" },
             message: { type: "string", nullable: true },
@@ -241,10 +242,11 @@ export const swaggerSpec = swaggerJsdoc({
         CreateBetInviteRequest: {
           type: "object",
           properties: {
+            betId: { type: "string", format: "uuid" },
             inviteeTwitterUsername: { type: "string" },
             message: { type: "string" },
           },
-          required: ["inviteeTwitterUsername"],
+          required: ["betId", "inviteeTwitterUsername"],
         },
         Bet: {
           type: "object",
@@ -259,11 +261,24 @@ export const swaggerSpec = swaggerJsdoc({
             currency: { type: "string" },
             status: {
               type: "string",
-              enum: ["PENDING", "LIVE", "SETTLED"],
+              enum: ["pending", "live", "settled", "closed"],
             },
             startAt: { type: "string", format: "date-time" },
             endAt: { type: "string", format: "date-time" },
             createdByUserId: { type: "string", format: "uuid" },
+            opponentUserId: { type: "string", format: "uuid", nullable: true },
+            creatorSide: { type: "string", enum: ["A", "B"] },
+            winnerSide: { type: "string", enum: ["A", "B"], nullable: true },
+            pickedWinnerByUserId: {
+              type: "string",
+              format: "uuid",
+              nullable: true,
+            },
+            settledAt: { type: "string", format: "date-time", nullable: true },
+            platformFeeAmount: { type: "string" },
+            payoutPoolAmount: { type: "string" },
+            totalPoolAmount: { type: "string" },
+            contractAddress: { type: "string", nullable: true },
             createdAt: { type: "string", format: "date-time" },
             updatedAt: { type: "string", format: "date-time" },
           },
@@ -280,6 +295,7 @@ export const swaggerSpec = swaggerJsdoc({
             "startAt",
             "endAt",
             "createdByUserId",
+            "creatorSide",
           ],
         },
         BetStats: {
@@ -302,6 +318,63 @@ export const swaggerSpec = swaggerJsdoc({
             },
           ],
         },
+        BetPayout: {
+          type: "object",
+          properties: {
+            id: { type: "string", format: "uuid" },
+            betId: { type: "string", format: "uuid" },
+            userId: { type: "string", format: "uuid" },
+            side: { type: "string", enum: ["A", "B"] },
+            stakedAmount: { type: "string" },
+            grossPayoutAmount: { type: "string" },
+            feeChargedAmount: { type: "string" },
+            netPayoutAmount: { type: "string" },
+            isWinner: { type: "boolean" },
+            status: { type: "string", enum: ["pending", "processed"] },
+            createdAt: { type: "string", format: "date-time" },
+            updatedAt: { type: "string", format: "date-time" },
+          },
+          required: [
+            "id",
+            "betId",
+            "userId",
+            "side",
+            "stakedAmount",
+            "grossPayoutAmount",
+            "feeChargedAmount",
+            "netPayoutAmount",
+            "isWinner",
+            "status",
+          ],
+        },
+        BetWithStatsAndPayouts: {
+          allOf: [
+            { $ref: "#/components/schemas/BetWithStats" },
+            {
+              type: "object",
+              properties: {
+                payouts: {
+                  type: "array",
+                  items: { $ref: "#/components/schemas/BetPayout" },
+                },
+              },
+            },
+          ],
+        },
+        BetWithPayouts: {
+          allOf: [
+            { $ref: "#/components/schemas/Bet" },
+            {
+              type: "object",
+              properties: {
+                payouts: {
+                  type: "array",
+                  items: { $ref: "#/components/schemas/BetPayout" },
+                },
+              },
+            },
+          ],
+        },
         CreateBetRequest: {
           type: "object",
           properties: {
@@ -315,11 +388,8 @@ export const swaggerSpec = swaggerJsdoc({
             },
             currency: { type: "string" },
             endAt: { type: "string", format: "date-time" },
-            status: {
-              type: "string",
-              enum: ["PENDING", "LIVE", "SETTLED"],
-            },
             startAt: { type: "string", format: "date-time" },
+            side: { type: "string", enum: ["A", "B"] },
           },
           required: [
             "title",
@@ -330,7 +400,15 @@ export const swaggerSpec = swaggerJsdoc({
             "stakeAmount",
             "currency",
             "endAt",
+            "side",
           ],
+        },
+        PickBetWinnerRequest: {
+          type: "object",
+          properties: {
+            winnerSide: { type: "string", enum: ["A", "B"] },
+          },
+          required: ["winnerSide"],
         },
         BetPrediction: {
           type: "object",
@@ -354,6 +432,29 @@ export const swaggerSpec = swaggerJsdoc({
             },
           },
           required: ["side", "amount"],
+        },
+        DashboardOverviewResponse: {
+          type: "object",
+          properties: {
+            stats: {
+              type: "object",
+              properties: {
+                totalValueLocked: { type: "number" },
+                activeBets: { type: "integer" },
+                activeUsers: { type: "integer" },
+              },
+            },
+            recentBets: {
+              type: "array",
+              items: { $ref: "#/components/schemas/Bet" },
+            },
+            jackpot: {
+              anyOf: [
+                { $ref: "#/components/schemas/Jackpot" },
+                { type: "null" },
+              ],
+            },
+          },
         },
       },
     },
@@ -855,6 +956,59 @@ export const swaggerSpec = swaggerJsdoc({
           },
         },
       },
+      "/api/jackpots/manual/resolve": {
+        post: {
+          summary: "Manually trigger jackpot resolution",
+          description:
+            "Triggers resolution for jackpots that have ended. Intended for admin/testing flows.",
+          tags: ["Jackpots"],
+          responses: {
+            "200": {
+              description: "Resolution process finished.",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      message: { type: "string" },
+                    },
+                  },
+                },
+              },
+            },
+            "500": {
+              description: "Internal server error.",
+            },
+          },
+        },
+      },
+      "/api/jackpots/manual/create-weekly": {
+        post: {
+          summary: "Manually create weekly jackpot",
+          description:
+            "Creates a new weekly jackpot immediately. Intended for admin/testing flows.",
+          tags: ["Jackpots"],
+          responses: {
+            "200": {
+              description: "Weekly jackpot created.",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      message: { type: "string" },
+                      data: { $ref: "#/components/schemas/Jackpot" },
+                    },
+                  },
+                },
+              },
+            },
+            "500": {
+              description: "Internal server error.",
+            },
+          },
+        },
+      },
       "/api/bet-invites": {
         post: {
           summary: "Create a bet invite",
@@ -904,7 +1058,7 @@ export const swaggerSpec = swaggerJsdoc({
         post: {
           summary: "Create a new bet",
           description:
-            "Creates a new A vs B bet with description, end condition, and minimum stake amount.",
+            "Creates a new bet in pending state. Opponent can later accept via /api/bets/{betId}/accept-invite.",
           tags: ["Bets"],
           security: [
             {
@@ -930,7 +1084,17 @@ export const swaggerSpec = swaggerJsdoc({
                     type: "object",
                     properties: {
                       message: { type: "string" },
-                      data: { $ref: "#/components/schemas/Bet" },
+                      data: {
+                        allOf: [
+                          { $ref: "#/components/schemas/Bet" },
+                          {
+                            type: "object",
+                            properties: {
+                              opponentSide: { type: "string", enum: ["A", "B"] },
+                            },
+                          },
+                        ],
+                      },
                     },
                   },
                 },
@@ -955,7 +1119,7 @@ export const swaggerSpec = swaggerJsdoc({
               in: "query",
               schema: {
                 type: "string",
-                enum: ["PENDING", "LIVE", "SETTLED"],
+                enum: ["pending", "live", "settled", "closed"],
               },
             },
             {
@@ -1014,7 +1178,7 @@ export const swaggerSpec = swaggerJsdoc({
                     type: "object",
                     properties: {
                       data: {
-                        $ref: "#/components/schemas/BetWithStats",
+                        $ref: "#/components/schemas/BetWithStatsAndPayouts",
                       },
                     },
                   },
@@ -1081,6 +1245,121 @@ export const swaggerSpec = swaggerJsdoc({
             },
             "404": {
               description: "Bet not found.",
+            },
+          },
+        },
+      },
+      "/api/bets/{betId}/accept-invite": {
+        post: {
+          summary: "Accept invite by bet ID",
+          description:
+            "Accepts a bet invite link using betId and marks bet as live by setting opponentUserId on the bet record.",
+          tags: ["Bets"],
+          security: [
+            {
+              bearerAuth: [],
+            },
+          ],
+          parameters: [
+            {
+              name: "betId",
+              in: "path",
+              required: true,
+              schema: { type: "string", format: "uuid" },
+            },
+          ],
+          responses: {
+            "200": {
+              description: "Invite accepted and bet moved to live.",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      message: { type: "string" },
+                      data: { $ref: "#/components/schemas/Bet" },
+                    },
+                  },
+                },
+              },
+            },
+            "400": { description: "Invalid state or creator tried to accept." },
+            "401": { description: "Missing or invalid authentication token." },
+            "404": { description: "Bet not found." },
+            "409": { description: "Bet already has an opponent." },
+          },
+        },
+      },
+      "/api/bets/{betId}/pick-winner": {
+        post: {
+          summary: "Pick winner for a bet",
+          description:
+            "Allows bet creator to pick winner side after endAt. Triggers settlement processing.",
+          tags: ["Bets"],
+          security: [
+            {
+              bearerAuth: [],
+            },
+          ],
+          parameters: [
+            {
+              name: "betId",
+              in: "path",
+              required: true,
+              schema: { type: "string", format: "uuid" },
+            },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/PickBetWinnerRequest",
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description: "Winner picked and settlement attempted.",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      message: { type: "string" },
+                      data: { $ref: "#/components/schemas/BetWithPayouts" },
+                    },
+                  },
+                },
+              },
+            },
+            "400": { description: "Invalid payload or bet state." },
+            "401": { description: "Missing or invalid authentication token." },
+            "403": { description: "Only creator can pick winner." },
+            "404": { description: "Bet not found." },
+          },
+        },
+      },
+      "/api/dashboard/overview": {
+        get: {
+          summary: "Get dashboard overview",
+          description:
+            "Returns aggregate platform metrics, recent bets, and active jackpot summary.",
+          tags: ["Dashboard"],
+          responses: {
+            "200": {
+              description: "Dashboard overview data.",
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/DashboardOverviewResponse",
+                  },
+                },
+              },
+            },
+            "500": {
+              description: "Internal server error.",
             },
           },
         },

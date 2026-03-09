@@ -17,13 +17,33 @@ export interface BetAttributes {
   startAt: Date;
   endAt: Date;
   createdByUserId: string;
+  opponentUserId?: string | null;
+  creatorSide: "A" | "B";
+  winnerSide?: "A" | "B" | null;
+  pickedWinnerByUserId?: string | null;
+  settledAt?: Date | null;
+  platformFeeAmount: string;
+  payoutPoolAmount: string;
+  totalPoolAmount: string;
+  contractAddress?: string;
   createdAt?: Date;
   updatedAt?: Date;
 }
 
 export type BetCreationAttributes = Optional<
   BetAttributes,
-  "id" | "status" | "startAt" | "createdAt" | "updatedAt"
+  | "id"
+  | "status"
+  | "startAt"
+  | "opponentUserId"
+  | "winnerSide"
+  | "pickedWinnerByUserId"
+  | "settledAt"
+  | "platformFeeAmount"
+  | "payoutPoolAmount"
+  | "totalPoolAmount"
+  | "createdAt"
+  | "updatedAt"
 >;
 
 export class Bet
@@ -42,6 +62,15 @@ export class Bet
   public startAt!: Date;
   public endAt!: Date;
   public createdByUserId!: string;
+  public opponentUserId!: string | null;
+  public creatorSide!: "A" | "B";
+  public winnerSide!: "A" | "B" | null;
+  public pickedWinnerByUserId!: string | null;
+  public settledAt!: Date | null;
+  public platformFeeAmount!: string;
+  public payoutPoolAmount!: string;
+  public totalPoolAmount!: string;
+  public contractAddress?: string;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
 }
@@ -99,6 +128,45 @@ Bet.init(
       type: DataTypes.UUID,
       allowNull: false,
     },
+    opponentUserId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+    },
+    creatorSide: {
+      type: DataTypes.ENUM("A", "B"),
+      allowNull: false,
+    },
+    winnerSide: {
+      type: DataTypes.ENUM("A", "B"),
+      allowNull: true,
+    },
+    pickedWinnerByUserId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+    },
+    settledAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    platformFeeAmount: {
+      type: DataTypes.DECIMAL(18, 8),
+      allowNull: false,
+      defaultValue: "0",
+    },
+    payoutPoolAmount: {
+      type: DataTypes.DECIMAL(18, 8),
+      allowNull: false,
+      defaultValue: "0",
+    },
+    totalPoolAmount: {
+      type: DataTypes.DECIMAL(18, 8),
+      allowNull: false,
+      defaultValue: "0",
+    },
+    contractAddress: {
+      type: DataTypes.STRING(42), // Ethereum address length is 42 chars (0x + 40 hex char)
+      allowNull: true,
+    },
   },
   {
     sequelize,
@@ -109,6 +177,8 @@ Bet.init(
       { fields: ["startAt"] },
       { fields: ["endAt"] },
       { fields: ["createdByUserId"] },
+      { fields: ["opponentUserId"] },
+      { fields: ["winnerSide"] },
     ],
   },
 );
@@ -121,4 +191,14 @@ User.hasMany(Bet, {
 Bet.belongsTo(User, {
   foreignKey: "createdByUserId",
   as: "creator",
+});
+
+User.hasMany(Bet, {
+  foreignKey: "opponentUserId",
+  as: "opponentBets",
+});
+
+Bet.belongsTo(User, {
+  foreignKey: "opponentUserId",
+  as: "opponent",
 });

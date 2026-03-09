@@ -6,6 +6,8 @@ import swaggerUi from "swagger-ui-express";
 import router from "./routes/routes";
 import { initDb } from "./config/database";
 import { swaggerSpec } from "./config/swagger";
+import { startJackpotWorker } from "./workers/jackpotWorker";
+import { startBetSettlementWorker } from "./workers/betSettlementWorker";
 
 dotenv.config();
 
@@ -33,6 +35,10 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
 
 const startServer = async () => {
   await initDb();
+
+  // Start the automated background workers
+  startJackpotWorker();
+  startBetSettlementWorker();
 
   app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);

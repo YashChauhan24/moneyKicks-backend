@@ -8,6 +8,10 @@ import {
   calculateWinnerDistribution,
   selectRandomWinners,
 } from "../utils/jackpot.utils";
+import {
+  resolvePreviousJackpots,
+  createNewWeeklyJackpot,
+} from "../workers/jackpotWorker";
 
 interface CreateJackpotBody {
   name: string;
@@ -516,6 +520,51 @@ export const selectJackpotWinners = async (
         },
         winners: selectedWinners,
       },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Manually trigger the jackpot resolution worker
+ */
+export const triggerJackpotResolve = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    console.log("[Admin API] Manually triggering jackpot resolution...");
+    // We don't await it if we want it to run in background,
+    // but for testing/manual trigger, it's better to await or at least start it.
+    // Awaiting here so the requester gets a confirmation when it's DONE or if it started.
+    await resolvePreviousJackpots();
+
+    return res.json({
+      message:
+        "Jackpot resolution process completed. Check server logs for details.",
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Manually trigger the creation of a new weekly jackpot
+ */
+export const triggerJackpotCreate = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    console.log("[Admin API] Manually triggering weekly jackpot creation...");
+    const jackpot = await createNewWeeklyJackpot();
+
+    return res.json({
+      message: "Weekly jackpot created successfully.",
+      data: jackpot,
     });
   } catch (error) {
     next(error);
