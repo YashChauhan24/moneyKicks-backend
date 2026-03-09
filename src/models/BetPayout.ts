@@ -3,12 +3,13 @@ import { sequelize } from "../config/database";
 import { Bet } from "./Bet";
 import { User } from "./User";
 
-export type BetPayoutStatus = "pending" | "processed";
+export type BetPayoutStatus = "pending" | "processing" | "processed";
 
 export interface BetPayoutAttributes {
   id: string;
   betId: string;
   userId: string;
+  walletAddress?: string | null;
   side: "A" | "B";
   stakedAmount: string;
   grossPayoutAmount: string;
@@ -32,6 +33,7 @@ export class BetPayout
   public id!: string;
   public betId!: string;
   public userId!: string;
+  public walletAddress!: string | null;
   public side!: "A" | "B";
   public stakedAmount!: string;
   public grossPayoutAmount!: string;
@@ -57,6 +59,10 @@ BetPayout.init(
     userId: {
       type: DataTypes.UUID,
       allowNull: false,
+    },
+    walletAddress: {
+      type: DataTypes.STRING(42),
+      allowNull: true,
     },
     side: {
       type: DataTypes.ENUM("A", "B"),
@@ -87,7 +93,7 @@ BetPayout.init(
       defaultValue: false,
     },
     status: {
-      type: DataTypes.ENUM("pending", "processed"),
+      type: DataTypes.ENUM("pending", "processing", "processed"),
       allowNull: false,
       defaultValue: "pending",
     },
@@ -100,7 +106,6 @@ BetPayout.init(
       { fields: ["betId"] },
       { fields: ["userId"] },
       { fields: ["isWinner"] },
-      { unique: true, fields: ["betId", "userId"] },
     ],
   },
 );

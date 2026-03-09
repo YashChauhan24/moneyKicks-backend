@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { Op, Sequelize, WhereOptions } from "sequelize";
+import { isAddress } from "viem";
 import { AuthenticatedRequest } from "../middleware/auth";
 import { Bet, BetAttributes, BetStatus } from "../models/Bet";
 import { BetPrediction, BetSide } from "../models/BetPrediction";
@@ -19,6 +20,7 @@ interface CreateBetBody {
   status?: BetStatus;
   startAt?: string;
   side?: BetSide;
+  walletAddress?: string;
 }
 
 interface PickWinnerBody {
@@ -28,6 +30,11 @@ interface PickWinnerBody {
 interface CreatePredictionBody {
   side: BetSide;
   amount: number | string;
+  walletAddress: string;
+}
+
+interface AcceptBetInviteBody {
+  walletAddress: string;
 }
 
 const parsePositiveAmount = (value: unknown): number | null => {
@@ -58,6 +65,7 @@ export const createBet = async (
       status,
       startAt,
       side,
+      walletAddress,
     } = req.body as CreateBetBody;
 
     if (!title || typeof title !== "string") {
@@ -117,7 +125,23 @@ export const createBet = async (
         .json({ message: "endAt must be greater than startAt." });
     }
 
-    const resolvedStatus: BetStatus = "pending";
+    const payoutWalletAddress =
+      walletAddress?.trim() || req.user.walletAddress?.trim();
+    if (!payoutWalletAddress) {
+      return res.status(400).json({
+        message:
+          "walletAddress is required to place creator stake. Pass walletAddress or set it in profile.",
+      });
+    }
+
+    if (!isAddress(payoutWalletAddress)) {
+      return res.status(400).json({
+        message: "walletAddress is invalid.",
+      });
+    }
+
+    const resolvedStatus: BetStatus =
+      status && typeof status === "string" ? (status as BetStatus) : "pending";
 
     // // --- DEPLOY BET ESCROW ON-CHAIN ---
     // let contractAddress: string | undefined;
@@ -190,6 +214,7 @@ export const createBet = async (
       userId: req.user.id,
       side,
       amount: String(parsedStake),
+      walletAddress: payoutWalletAddress,
     });
 
     return res.status(201).json({
@@ -415,7 +440,7 @@ export const createBetPrediction = async (
     }
 
     const { betId } = req.params as { betId: string };
-    const { side, amount } = req.body as CreatePredictionBody;
+    const { side, amount, walletAddress } = req.body as CreatePredictionBody;
 
     if (side !== "A" && side !== "B") {
       return res.status(400).json({ message: "side must be 'A' or 'B'." });
@@ -425,6 +450,19 @@ export const createBetPrediction = async (
     if (parsedAmount === null) {
       return res.status(400).json({
         message: "amount must be a positive number.",
+      });
+    }
+
+    const predictionWalletAddress = walletAddress?.trim();
+    if (!predictionWalletAddress) {
+      return res.status(400).json({
+        message: "walletAddress is required.",
+      });
+    }
+
+    if (!isAddress(predictionWalletAddress)) {
+      return res.status(400).json({
+        message: "walletAddress is invalid.",
       });
     }
 
@@ -465,7 +503,15 @@ export const createBetPrediction = async (
         message: "Bet is not ready yet. Opponent has not accepted invite.",
       });
     }
-    const isCoreParticipant = req.user.id === creatorId || req.user.id === opponentId;
+    const isCoreParticipant =
+      req.user.id === creatorId || req.user.id === opponentId;
+
+    const existingUserPredictions = await BetPrediction.findAll({
+      where: {
+        betId,
+        userId: req.user.id,
+      },
+    });
 
     if (isCoreParticipant) {
       const expectedSide: BetSide =
@@ -481,16 +527,10 @@ export const createBetPrediction = async (
         });
       }
 
-      const existingPrediction = await BetPrediction.findOne({
-        where: {
-          betId,
-          userId: req.user.id,
-        },
-      });
-
-      if (existingPrediction) {
+      if (existingUserPredictions.length > 0) {
         return res.status(409).json({
-          message: "Creator and opponent can place only one fixed stake in this bet.",
+          message:
+            "Creator and opponent can place only one fixed stake in this bet.",
         });
       }
 
@@ -500,13 +540,9 @@ export const createBetPrediction = async (
         });
       }
     } else {
-      const oppositeSidePrediction = await BetPrediction.findOne({
-        where: {
-          betId,
-          userId: req.user.id,
-          side: side === "A" ? "B" : "A",
-        },
-      });
+      const oppositeSidePrediction = existingUserPredictions.find(
+        (prediction) => prediction.side === (side === "A" ? "B" : "A"),
+      );
 
       if (oppositeSidePrediction) {
         return res.status(409).json({
@@ -521,6 +557,7 @@ export const createBetPrediction = async (
       userId: req.user.id,
       side,
       amount: String(parsedAmount),
+      walletAddress: predictionWalletAddress,
     });
 
     return res.status(201).json({
@@ -546,6 +583,19 @@ export const acceptBetInvite = async (
     }
 
     const { betId } = req.params as { betId: string };
+    const { walletAddress } = req.body as AcceptBetInviteBody;
+
+    const inviteWalletAddress = walletAddress?.trim();
+    if (!inviteWalletAddress) {
+      await tx.rollback();
+      return res.status(400).json({ message: "walletAddress is required." });
+    }
+
+    if (!isAddress(inviteWalletAddress)) {
+      await tx.rollback();
+      return res.status(400).json({ message: "walletAddress is invalid." });
+    }
+
     const bet = await Bet.findByPk(betId, {
       transaction: tx,
       lock: tx.LOCK.UPDATE,
@@ -585,6 +635,38 @@ export const acceptBetInvite = async (
         },
         { transaction: tx },
       );
+    }
+
+    const opponentSide: BetSide = bet.creatorSide === "A" ? "B" : "A";
+    const existingOpponentPrediction = await BetPrediction.findOne({
+      where: {
+        betId: bet.id,
+        userId: req.user.id,
+      },
+      transaction: tx,
+      lock: tx.LOCK.UPDATE,
+    });
+
+    if (!existingOpponentPrediction) {
+      await BetPrediction.create(
+        {
+          betId: bet.id,
+          userId: req.user.id,
+          side: opponentSide,
+          amount: String(bet.stakeAmount),
+          walletAddress: inviteWalletAddress,
+        },
+        { transaction: tx },
+      );
+    } else if (
+      existingOpponentPrediction.walletAddress.toLowerCase() !==
+      inviteWalletAddress.toLowerCase()
+    ) {
+      await tx.rollback();
+      return res.status(409).json({
+        message:
+          "Opponent stake already exists with a different walletAddress for this bet.",
+      });
     }
 
     await tx.commit();

@@ -16,7 +16,7 @@ export const sequelize = new Sequelize(
     host: (process.env.DB_HOST as string) || "localhost",
     port: Number(process.env.DB_PORT || 3306),
     dialect: "mysql",
-    logging: process.env.DB_LOGGING === "true" ? console.log : false,
+    // logging: process.env.DB_LOGGING === "true" ? console.log : false,
   }
 );
 

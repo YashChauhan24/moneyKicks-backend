@@ -1,10 +1,16 @@
 import { Request, Response, NextFunction } from "express";
 import { TwitterApi } from "twitter-api-v2";
+import { isAddress } from "viem";
 import { twitterRequestClient } from "../config/twitter";
 import { User } from "../models/User";
 import { signUserJwt } from "../utils/jwt";
+import { AuthenticatedRequest } from "../middleware/auth";
 
 const oauthTokenSecrets = new Map<string, string>();
+
+interface UpdateWalletBody {
+  walletAddress: string;
+}
 
 export const getTwitterAuthUrl = async (
   req: Request,
@@ -116,6 +122,47 @@ export const twitterCallback = async (
       message: "Twitter login successful.",
       token,
       user,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const updateMyWalletAddress = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Unauthorized." });
+    }
+
+    const { walletAddress: rawWalletAddress } = req.body as UpdateWalletBody;
+    const walletAddress = rawWalletAddress?.trim();
+    if (!walletAddress) {
+      return res.status(400).json({ message: "walletAddress is required." });
+    }
+
+    if (!isAddress(walletAddress)) {
+      return res.status(400).json({ message: "walletAddress is invalid." });
+    }
+
+    const existingUser = await User.findOne({
+      where: { walletAddress },
+    });
+
+    if (existingUser && existingUser.id !== req.user.id) {
+      return res.status(409).json({
+        message: "This wallet address is already linked to another user.",
+      });
+    }
+
+    await req.user.update({ walletAddress });
+
+    return res.json({
+      message: "Wallet address updated successfully.",
+      data: req.user,
     });
   } catch (error) {
     next(error);

@@ -324,13 +324,17 @@ export const swaggerSpec = swaggerJsdoc({
             id: { type: "string", format: "uuid" },
             betId: { type: "string", format: "uuid" },
             userId: { type: "string", format: "uuid" },
+            walletAddress: { type: "string", nullable: true },
             side: { type: "string", enum: ["A", "B"] },
             stakedAmount: { type: "string" },
             grossPayoutAmount: { type: "string" },
             feeChargedAmount: { type: "string" },
             netPayoutAmount: { type: "string" },
             isWinner: { type: "boolean" },
-            status: { type: "string", enum: ["pending", "processed"] },
+            status: {
+              type: "string",
+              enum: ["pending", "processing", "processed"],
+            },
             createdAt: { type: "string", format: "date-time" },
             updatedAt: { type: "string", format: "date-time" },
           },
@@ -390,6 +394,7 @@ export const swaggerSpec = swaggerJsdoc({
             endAt: { type: "string", format: "date-time" },
             startAt: { type: "string", format: "date-time" },
             side: { type: "string", enum: ["A", "B"] },
+            walletAddress: { type: "string" },
           },
           required: [
             "title",
@@ -418,10 +423,18 @@ export const swaggerSpec = swaggerJsdoc({
             userId: { type: "string", format: "uuid" },
             side: { type: "string", enum: ["A", "B"] },
             amount: { type: "string" },
+            walletAddress: { type: "string" },
             createdAt: { type: "string", format: "date-time" },
             updatedAt: { type: "string", format: "date-time" },
           },
-          required: ["id", "betId", "userId", "side", "amount"],
+          required: ["id", "betId", "userId", "side", "amount", "walletAddress"],
+        },
+        AcceptBetInviteRequest: {
+          type: "object",
+          properties: {
+            walletAddress: { type: "string" },
+          },
+          required: ["walletAddress"],
         },
         CreateBetPredictionRequest: {
           type: "object",
@@ -430,8 +443,9 @@ export const swaggerSpec = swaggerJsdoc({
             amount: {
               oneOf: [{ type: "number" }, { type: "string" }],
             },
+            walletAddress: { type: "string" },
           },
-          required: ["side", "amount"],
+          required: ["side", "amount", "walletAddress"],
         },
         DashboardOverviewResponse: {
           type: "object",
@@ -1268,6 +1282,16 @@ export const swaggerSpec = swaggerJsdoc({
               schema: { type: "string", format: "uuid" },
             },
           ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/AcceptBetInviteRequest",
+                },
+              },
+            },
+          },
           responses: {
             "200": {
               description: "Invite accepted and bet moved to live.",

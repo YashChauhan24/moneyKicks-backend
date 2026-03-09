@@ -13,6 +13,7 @@ export interface UserAttributes {
   // OAuth tokens (store securely, consider encryption at-rest in production)
   twitterAccessToken?: string | null;
   twitterRefreshToken?: string | null;
+  walletAddress?: string | null;
 
   createdAt?: Date;
   updatedAt?: Date;
@@ -27,6 +28,7 @@ export type UserCreationAttributes = Optional<
   | "twitterAvatar"
   | "twitterAccessToken"
   | "twitterRefreshToken"
+  | "walletAddress"
   | "createdAt"
   | "updatedAt"
 >;
@@ -44,6 +46,7 @@ export class User
 
   public twitterAccessToken!: string | null;
   public twitterRefreshToken!: string | null;
+  public walletAddress!: string | null;
 
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
@@ -78,6 +81,10 @@ User.init(
     },
     twitterRefreshToken: {
       type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    walletAddress: {
+      type: DataTypes.STRING(42),
       allowNull: true,
     },
   },

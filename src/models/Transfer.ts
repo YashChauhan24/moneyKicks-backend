@@ -17,13 +17,20 @@ export interface TransferAttributes {
   txHash?: string | null;
   network?: string | null; // e.g. "avalanche", "ethereum", etc.
   jackpotId?: string | null;
+  betId?: string | null;
   createdAt?: Date;
   updatedAt?: Date;
 }
 
 export type TransferCreationAttributes = Optional<
   TransferAttributes,
-  "id" | "txHash" | "network" | "jackpotId" | "createdAt" | "updatedAt"
+  | "id"
+  | "txHash"
+  | "network"
+  | "jackpotId"
+  | "betId"
+  | "createdAt"
+  | "updatedAt"
 >;
 
 /**
@@ -76,6 +83,10 @@ Transfer.init(
       allowNull: true,
     },
     jackpotId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+    },
+    betId: {
       type: DataTypes.UUID,
       allowNull: true,
     },

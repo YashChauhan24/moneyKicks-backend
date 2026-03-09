@@ -11,6 +11,7 @@ export interface BetPredictionAttributes {
   userId: string;
   side: BetSide;
   amount: string;
+  walletAddress: string;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -29,6 +30,7 @@ export class BetPrediction
   public userId!: string;
   public side!: BetSide;
   public amount!: string;
+  public walletAddress!: string;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
 }
@@ -54,6 +56,10 @@ BetPrediction.init(
     },
     amount: {
       type: DataTypes.DECIMAL(18, 8),
+      allowNull: false,
+    },
+    walletAddress: {
+      type: DataTypes.STRING(42),
       allowNull: false,
     },
   },
@@ -88,4 +94,3 @@ BetPrediction.belongsTo(User, {
   foreignKey: "userId",
   as: "user",
 });
-
