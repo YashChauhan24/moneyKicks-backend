@@ -465,6 +465,8 @@ export const createBetPrediction = async (
         message: "walletAddress is invalid.",
       });
     }
+    const normalizedPredictionWalletAddress =
+      predictionWalletAddress.toLowerCase();
 
     const bet = await Bet.findByPk(betId);
     if (!bet) {
@@ -527,10 +529,16 @@ export const createBetPrediction = async (
         });
       }
 
-      if (existingUserPredictions.length > 0) {
+      const existingPredictionForWallet = existingUserPredictions.find(
+        (prediction) =>
+          prediction.walletAddress?.trim().toLowerCase() ===
+          normalizedPredictionWalletAddress,
+      );
+
+      if (existingPredictionForWallet) {
         return res.status(409).json({
           message:
-            "Creator and opponent can place only one fixed stake in this bet.",
+            "Creator and opponent can place only one fixed stake per walletAddress in this bet.",
         });
       }
 
