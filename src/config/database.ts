@@ -14,10 +14,10 @@ export const sequelize = new Sequelize(
   process.env.DB_PASSWORD,
   {
     host: (process.env.DB_HOST as string) || "localhost",
-    port: Number(process.env.DB_PORT || 3306),
-    dialect: "mysql",
-    // logging: process.env.DB_LOGGING === "true" ? console.log : false,
-  }
+    port: Number(process.env.DB_PORT || 5432),
+    dialect: "postgres",
+    logging: process.env.DB_LOGGING === "true" ? console.log : false,
+  },
 );
 
 /**
@@ -27,7 +27,7 @@ export const sequelize = new Sequelize(
 export const initDb = async (): Promise<void> => {
   try {
     await sequelize.authenticate();
-    console.log("✅ Connected to MySQL");
+    console.log("✅ Connected to PostgreSQL database");
 
     // Sync models – in production you may want migrations instead
     await sequelize.sync({ alter: true });
