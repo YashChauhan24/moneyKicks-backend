@@ -1,6 +1,6 @@
 # moneyKicks Backend
 
-Backend service for the moneyKicks social betting and jackpot platform. The project is a TypeScript + Express monolith backed by MySQL via Sequelize, with Twitter/X OAuth login, JWT-protected routes, jackpot and bet lifecycle management, and background workers for settlement and prize distribution.
+Backend service for the moneyKicks social betting and jackpot platform. The project is a TypeScript + Express monolith backed by postgreSQL via Sequelize, with Twitter/X OAuth login, JWT-protected routes, jackpot and bet lifecycle management, and background workers for settlement and prize distribution.
 
 ## What It Does
 
@@ -16,7 +16,7 @@ Backend service for the moneyKicks social betting and jackpot platform. The proj
 ## Tech Stack
 
 - Runtime: Node.js, TypeScript, Express 5
-- Database: MySQL
+- Database: postgreSQL
 - ORM: Sequelize
 - Auth: Twitter/X OAuth, JWT
 - Jobs: `node-cron`
@@ -55,9 +55,9 @@ Copy `.env.example` to `.env` and fill in the required values.
 cp .env.example .env
 ```
 
-### 3. Start MySQL
+### 3. Start PostgreSQL
 
-Create a MySQL database matching `DB_NAME` and ensure the configured user can connect to it.
+Create a PostgreSQL database matching `DB_NAME` and ensure the configured user can connect to it.
 
 ### 4. Run the backend
 
@@ -87,11 +87,11 @@ The API defaults to `http://localhost:4000`.
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `PORT` | No | HTTP server port, defaults to `4000` |
-| `DB_HOST` | Yes | MySQL host |
-| `DB_PORT` | Yes | MySQL port |
-| `DB_USER` | Yes | MySQL username |
-| `DB_PASSWORD` | Yes | MySQL password |
-| `DB_NAME` | Yes | MySQL database name |
+| `DB_HOST` | Yes | PostgreSQL host |
+| `DB_PORT` | Yes | PostgreSQL port |
+| `DB_USER` | Yes | PostgreSQL username |
+| `DB_PASSWORD` | Yes | PostgreSQL password |
+| `DB_NAME` | Yes | PostgreSQL database name |
 | `DB_LOGGING` | No | Intended DB logging toggle |
 | `JWT_SECRET` | Yes | Secret used to sign auth tokens |
 | `TWITTER_APP_KEY` | Yes | Twitter/X app key |
@@ -196,7 +196,7 @@ This backend is still primarily database-first. The Solidity workspace exists fo
 
 ## Database Behavior
 
-On startup, the app authenticates against MySQL and runs:
+On startup, the app authenticates against PostgreSQL and runs:
 
 ```ts
 sequelize.sync({ alter: true })
